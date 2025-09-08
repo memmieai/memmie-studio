@@ -1,0 +1,147 @@
+provider:
+  id: book-writer
+  name: Book Writing Assistant
+  type: hybrid  # Both namespace and processor
+  description: Comprehensive book writing assistance with chapter expansion, consistency checking, and outline management
+  
+  namespace:
+    name: Book Project
+    allow_sub_namespaces: true
+    schema:
+      required_fields:
+        - chapter_number
+        - status
+        - type
+      valid_statuses:
+        - outline
+        - draft
+        - expanded
+        - edited
+        - final
+      valid_types:
+        - chapter
+        - outline
+        - character_sheet
+        - world_building
+        - notes
+    on_create_providers:
+      - grammar-checker
+      - word-counter
+    on_edit_providers:
+      - consistency-checker
+      - auto-save
+  
+  processor:
+    capabilities:
+      - expand_content
+      - check_consistency
+      - generate_outline
+      - track_characters
+      - summarize_chapters
+      - suggest_improvements
+    
+workflows:
+  - workflow_id: book_chapter_processing
+    triggers:
+      - event: onCreate
+        conditions:
+          - field: metadata.type
+            operator: eq
+            value: chapter
+          - field: metadata.status
+            operator: in
+            value: [draft, outline]
+        priority: 10
+        async: true
+        
+      - event: onUpdate
+        conditions:
+          - field: metadata.type
+            operator: eq
+            value: chapter
+          - field: metadata.request_expansion
+            operator: eq
+            value: true
+        priority: 8
+        async: true
+    
+  - workflow_id: book_outline_generation
+    triggers:
+      - event: onCreate
+        conditions:
+          - field: metadata.type
+            operator: eq
+            value: outline_request
+        priority: 5
+        async: false
+    
+  - workflow_id: character_consistency_check
+    triggers:
+      - event: onUpdate
+        conditions:
+          - field: metadata.type
+            operator: eq
+            value: character_sheet
+        priority: 7
+        async: true
+
+config:
+  max_concurrent_jobs: 3
+  rate_limit_per_min: 10
+  timeout_seconds: 300
+  retry_policy:
+    max_attempts: 3
+    backoff_multiplier: 2.0
+    initial_delay_ms: 1000
+    max_delay_ms: 30000
+  
+  parameters:
+    # AI Model Configuration
+    expansion_model: gpt-4
+    expansion_temperature: 0.7
+    expansion_max_tokens: 3000
+    
+    # Writing Style
+    default_style: descriptive
+    maintain_voice: true
+    preserve_tense: true
+    
+    # Chapter Processing
+    min_chapter_words: 1500
+    target_chapter_words: 3000
+    max_chapter_words: 5000
+    
+    # Consistency Checking
+    consistency_threshold: 0.8
+    check_character_consistency: true
+    check_timeline_consistency: true
+    check_location_consistency: true
+    
+    # Summary Generation
+    summary_length: medium
+    include_themes: true
+    include_plot_points: true
+    
+    # Outline Management
+    auto_update_outline: true
+    track_word_count: true
+    track_chapter_status: true
+
+permissions:
+  read: [owner, collaborators]
+  write: [owner, collaborators]
+  delete: [owner]
+  share: [owner]
+
+metadata:
+  category: creative_writing
+  tags:
+    - book
+    - novel
+    - creative
+    - ai-assisted
+    - writing
+  version: "1.0.0"
+  author: memmie-studio
+  documentation_url: /docs/providers/book-writer
+  support_email: support@memmie.ai

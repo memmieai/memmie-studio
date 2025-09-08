@@ -1,0 +1,195 @@
+id: book_chapter_processing
+provider_id: book-writer
+name: Book Chapter Processing Pipeline
+description: Processes book chapters with expansion, consistency checking, and summarization
+input_schema_id: blob_input_schema_v1
+output_schema_id: delta_output_schema_v1
+active: true
+
+steps:
+  - id: load_chapter
+    name: Load Chapter Content
+    type: api_call
+    service: studio
+    endpoint: /api/v1/blobs/{blob_id}
+    method: GET
+    input_map:
+      blob_id: $.input.blob_id
+    output_map:
+      content: $.content
+      metadata: $.metadata
+      chapter_number: $.metadata.chapter_number
+      word_count: $.metadata.word_count
+    timeout_seconds: 20
+
+  - id: validate_chapter_structure
+    name: Validate Chapter Structure
+    type: api_call
+    service: studio
+    endpoint: /api/v1/validation/chapter
+    method: POST
+    input_map:
+      content: $.steps.load_chapter.output.content
+      chapter_number: $.steps.load_chapter.output.chapter_number
+      expected_sections:
+        - title
+        - content
+        - notes
+    timeout_seconds: 15
+    on_failure: fail
+
+  - id: expand_content
+    name: AI Content Expansion
+    type: api_call
+    service: core
+    endpoint: /api/v1/generate
+    method: POST
+    input_map:
+      system_prompt: |
+        You are a creative writing assistant helping to expand book chapters.
+        Maintain the author's voice and style while adding:
+        - Descriptive details and sensory elements
+        - Character thoughts and emotions
+        - Dialogue and interactions
+        - Scene setting and atmosphere
+      user_prompt: |
+        Expand the following chapter content:
+        
+        Chapter {$.steps.load_chapter.output.chapter_number}
+        
+        {$.steps.load_chapter.output.content}
+      model: gpt-4
+      temperature: 0.7
+      max_tokens: 3000
+    condition: $.steps.validate_chapter_structure.output.valid == true
+    timeout_seconds: 90
+    retry:
+      max_attempts: 3
+      backoff_ms: 2000
+
+  - id: extract_characters
+    name: Extract Character Information
+    type: api_call
+    service: studio
+    endpoint: /api/v1/analysis/characters
+    method: POST
+    input_map:
+      content: $.steps.expand_content.output.text
+      chapter_number: $.steps.load_chapter.output.chapter_number
+    output_map:
+      characters: $.characters
+      interactions: $.interactions
+      development: $.development
+    timeout_seconds: 30
+
+  - id: check_consistency
+    name: Check Story Consistency
+    type: api_call
+    service: studio
+    endpoint: /api/v1/consistency/check
+    method: POST
+    input_map:
+      book_id: $.input.namespace_id
+      chapter_content: $.steps.expand_content.output.text
+      chapter_number: $.steps.load_chapter.output.chapter_number
+      characters: $.steps.extract_characters.output.characters
+      previous_chapters:
+        limit: 3
+        fields:
+          - characters
+          - timeline
+          - locations
+    output_map:
+      consistency_score: $.score
+      issues: $.issues
+      suggestions: $.suggestions
+    timeout_seconds: 45
+
+  - id: generate_summary
+    name: Generate Chapter Summary
+    type: api_call
+    service: studio
+    endpoint: /api/v1/summarize
+    method: POST
+    input_map:
+      content: $.steps.expand_content.output.text
+      type: chapter_summary
+      length: medium
+      include_elements:
+        - plot_points
+        - character_development
+        - themes
+        - key_dialogue
+    output_map:
+      summary: $.summary
+      key_points: $.key_points
+    timeout_seconds: 30
+
+  - id: update_outline
+    name: Update Book Outline
+    type: api_call
+    service: studio
+    endpoint: /api/v1/books/{book_id}/outline
+    method: PATCH
+    input_map:
+      book_id: $.input.namespace_id
+      chapter_number: $.steps.load_chapter.output.chapter_number
+      chapter_data:
+        summary: $.steps.generate_summary.output.summary
+        word_count: $.steps.expand_content.output.word_count
+        characters: $.steps.extract_characters.output.characters
+        consistency_score: $.steps.check_consistency.output.consistency_score
+        status: expanded
+    timeout_seconds: 20
+
+  - id: create_expanded_blob
+    name: Create Expanded Chapter Blob
+    type: api_call
+    service: studio
+    endpoint: /api/v1/blobs
+    method: POST
+    input_map:
+      parent_id: $.input.blob_id
+      namespace_id: $.input.namespace_id
+      content: $.steps.expand_content.output.text
+      metadata:
+        type: expanded_chapter
+        original_id: $.input.blob_id
+        chapter_number: $.steps.load_chapter.output.chapter_number
+        word_count: $.steps.expand_content.output.word_count
+        consistency_score: $.steps.check_consistency.output.consistency_score
+        characters: $.steps.extract_characters.output.characters
+        summary: $.steps.generate_summary.output.summary
+        expansion_model: gpt-4
+        processed_at: $.execution.started_at
+    output_map:
+      new_blob_id: $.id
+      created_at: $.created_at
+    timeout_seconds: 30
+
+  - id: generate_deltas
+    name: Generate Chapter Processing Deltas
+    type: api_call
+    service: studio
+    endpoint: /api/v1/deltas/generate
+    method: POST
+    input_map:
+      blob_id: $.input.blob_id
+      operations:
+        - type: create_derived
+          path: /derived/expanded
+          value:
+            blob_id: $.steps.create_expanded_blob.output.new_blob_id
+            type: expanded_chapter
+        - type: update
+          path: /metadata/processing_status
+          value: completed
+        - type: update
+          path: /metadata/consistency_score
+          value: $.steps.check_consistency.output.consistency_score
+        - type: update
+          path: /metadata/last_processed
+          value: $.execution.started_at
+    output_map:
+      deltas: $.deltas
+    timeout_seconds: 20

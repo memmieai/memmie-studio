@@ -1,0 +1,72 @@
+id: delta_output_schema_v1
+provider_id: memmie-studio
+name: Delta Output Schema
+version: "1.0"
+type: output
+description: Schema for delta processing output
+
+definition:
+  type: object
+  required:
+    - deltas
+    - execution_id
+    - status
+  properties:
+    execution_id:
+      type: string
+      format: uuid
+      description: Workflow execution ID
+    status:
+      type: string
+      enum: [success, partial, failed]
+      description: Overall processing status
+    deltas:
+      type: array
+      items:
+        type: object
+        required:
+          - type
+          - path
+        properties:
+          type:
+            type: string
+            enum: [create, update, delete, transform, create_derived]
+            description: Type of delta operation
+          path:
+            type: string
+            description: JSON path where delta applies
+          old_value:
+            description: Previous value (for updates)
+          new_value:
+            description: New value
+          metadata:
+            type: object
+            additionalProperties: true
+    created_blobs:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uuid
+          parent_id:
+            type: string
+            format: uuid
+          type:
+            type: string
+          provider_id:
+            type: string
+      description: New blobs created during processing
+    errors:
+      type: array
+      items:
+        type: object
+        properties:
+          step_id:
+            type: string
+          error_code:
+            type: string
+          message:
+            type: string
+      description: Any errors encountered during processing

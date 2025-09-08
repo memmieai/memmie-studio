@@ -1,0 +1,127 @@
+id: blob_processing_workflow
+provider_id: memmie-studio
+name: Blob Processing Pipeline
+description: Main workflow for processing blobs through provider transformations
+input_schema_id: blob_input_schema_v1
+output_schema_id: delta_output_schema_v1
+active: true
+
+steps:
+  - id: validate_blob
+    name: Validate Blob Structure
+    type: api_call
+    service: studio
+    endpoint: /api/v1/blobs/validate
+    method: POST
+    input_map:
+      blob_id: $.input.blob_id
+      user_id: $.input.user_id
+      namespace_id: $.input.namespace_id
+    timeout_seconds: 30
+    on_failure: fail
+    retry:
+      max_attempts: 2
+      backoff_ms: 1000
+      max_backoff_ms: 5000
+
+  - id: load_blob_data
+    name: Load Blob Content and Metadata
+    type: api_call
+    service: studio
+    endpoint: /api/v1/blobs/{blob_id}
+    method: GET
+    input_map:
+      blob_id: $.input.blob_id
+      user_id: $.input.user_id
+    condition: $.steps.validate_blob.output.valid == true
+    output_map:
+      content: $.content
+      metadata: $.metadata
+      checksum: $.checksum
+    timeout_seconds: 20
+
+  - id: determine_providers
+    name: Determine Applicable Providers
+    type: api_call
+    service: studio
+    endpoint: /api/v1/providers/match
+    method: POST
+    input_map:
+      provider_ids: $.input.provider_ids
+      blob_metadata: $.steps.load_blob_data.output.metadata
+      trigger_event: $.input.trigger_event
+      namespace_id: $.input.namespace_id
+    output_map:
+      matched_providers: $.providers
+      provider_configs: $.configs
+    timeout_seconds: 15
+
+  - id: execute_provider_chain
+    name: Execute Provider Processing Chain
+    type: api_call
+    service: studio
+    endpoint: /api/v1/providers/execute-chain
+    method: POST
+    input_map:
+      blob_id: $.input.blob_id
+      providers: $.steps.determine_providers.output.matched_providers
+      content: $.steps.load_blob_data.output.content
+      metadata: $.steps.load_blob_data.output.metadata
+      configs: $.steps.determine_providers.output.provider_configs
+    timeout_seconds: 120
+    on_failure: continue
+    compensation:
+      service: studio
+      endpoint: /api/v1/providers/rollback
+      method: POST
+      input_map:
+        blob_id: $.input.blob_id
+        execution_id: $.execution.id
+        providers: $.steps.determine_providers.output.matched_providers
+
+  - id: generate_deltas
+    name: Generate State Deltas
+    type: api_call
+    service: studio
+    endpoint: /api/v1/deltas/generate
+    method: POST
+    input_map:
+      blob_id: $.input.blob_id
+      original_content: $.steps.load_blob_data.output.content
+      original_metadata: $.steps.load_blob_data.output.metadata
+      provider_outputs: $.steps.execute_provider_chain.output
+      execution_id: $.execution.id
+    output_map:
+      deltas: $.deltas
+      created_blobs: $.created_blobs
+    timeout_seconds: 30
+
+  - id: apply_deltas
+    name: Apply Deltas to Blob Storage
+    type: api_call
+    service: studio
+    endpoint: /api/v1/deltas/apply
+    method: POST
+    input_map:
+      blob_id: $.input.blob_id
+      deltas: $.steps.generate_deltas.output.deltas
+      user_id: $.input.user_id
+      execution_id: $.execution.id
+    timeout_seconds: 45
+    on_failure: compensate
+
+  - id: emit_events
+    name: Emit Processing Events
+    type: api_call
+    service: studio
+    endpoint: /api/v1/events/emit
+    method: POST
+    input_map:
+      event_type: blob.processed
+      blob_id: $.input.blob_id
+      user_id: $.input.user_id
+      deltas: $.steps.generate_deltas.output.deltas
+      created_blobs: $.steps.generate_deltas.output.created_blobs
+      execution_id: $.execution.id
+    timeout_seconds: 10
+    on_failure: continue

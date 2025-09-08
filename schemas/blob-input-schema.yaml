@@ -1,0 +1,38 @@
+id: blob_input_schema_v1
+provider_id: memmie-studio
+name: Blob Input Schema
+version: "1.0"
+type: input
+description: Schema for blob processing input
+
+definition:
+  type: object
+  required:
+    - blob_id
+    - user_id
+    - provider_ids
+  properties:
+    blob_id:
+      type: string
+      format: uuid
+      description: The blob to process
+    user_id:
+      type: string
+      format: uuid
+      description: The user who owns the blob
+    provider_ids:
+      type: array
+      items:
+        type: string
+      description: List of provider IDs to trigger
+    namespace_id:
+      type: string
+      description: Optional namespace provider ID
+    metadata:
+      type: object
+      additionalProperties: true
+      description: Additional metadata for processing
+    trigger_event:
+      type: string
+      enum: [onCreate, onUpdate, onDelete]
+      description: The event that triggered processing
