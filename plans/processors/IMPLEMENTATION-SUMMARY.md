@@ -9,7 +9,7 @@ This document summarizes all the architectural updates made to align ReYNa Studi
 ### 1. Schema Service as Central Authority
 - **New Service**: Schema Service (Port 8011) using PostgreSQL
 - **Purpose**: Single source of truth for all data schemas
-- **Features**: Versioning, validation, compatibility checking
+- **Features**: Versioning, validation, compatibility checking, bucket schemas
 - **Location**: `/plans/06-schema-service-design.md`
 
 ### 2. Processor-Centric Architecture  
@@ -24,12 +24,18 @@ This document summarizes all the architectural updates made to align ReYNa Studi
 - **Location**: `/plans/processors/REC.md`
 
 ### 3. State Service as Blob Storage
-- **Updated**: UserState now contains blob storage
-- **Structure**: Books, conversations, collections of blobs
+- **Updated**: UserState now contains blob storage with dynamic buckets
+- **Structure**: Flexible bucket hierarchy replacing fixed fields
 - **Integration**: Schema validation on all blob creates/updates
 - **Location**: `/plans/01-state-service-design.md` (updated)
 
-### 4. Real-time WebSocket Support
+### 4. Dynamic Bucket System
+- **New System**: Replaces fixed fields (book_id, conversation_id) with flexible buckets
+- **Purpose**: Universal organization system for any content type
+- **Features**: Hierarchical structure, type-agnostic, metadata flexibility
+- **Documentation**: `/plans/processors/buckets/`
+
+### 5. Real-time WebSocket Support
 - **New Design**: Comprehensive WebSocket implementation
 - **Features**: Event filtering, user-specific routing, reconnection
 - **Protocol**: Defined message types for client-server communication
@@ -63,6 +69,8 @@ This document summarizes all the architectural updates made to align ReYNa Studi
 3. `/plans/processors/03-hybrid-approach.md` - Hybrid storage model
 4. `/plans/processors/REC.md` - **Final architecture recommendation**
 5. `/plans/processors/text-expansion-workflow.md` - Complete processor example
+6. `/plans/processors/buckets/08-bucket-system-design.md` - Dynamic bucket system
+7. `/plans/processors/buckets/09-bucket-examples.md` - Bucket use case examples
 
 ### New Service Designs
 1. `/plans/06-schema-service-design.md` - Schema Service specification
