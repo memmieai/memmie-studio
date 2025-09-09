@@ -140,9 +140,8 @@ type Blob struct {
     ParentID    *string                `bson:"parent_id,omitempty"`
     DerivedIDs  []string               `bson:"derived_ids"`
     
-    // Organization
-    BookID      *string                `bson:"book_id,omitempty"`
-    ConversationID *string             `bson:"conversation_id,omitempty"`
+    // Flexible organization via buckets
+    BucketIDs   []string               `bson:"bucket_ids"`
     
     CreatedAt   time.Time              `bson:"created_at"`
     UpdatedAt   time.Time              `bson:"updated_at"`
@@ -151,15 +150,34 @@ type Blob struct {
 type UserState struct {
     UserID      string                 `bson:"user_id"`
     
-    // Organized content
-    Books       []BookProject          `bson:"books"`
-    Conversations []Conversation       `bson:"conversations"`
+    // Root-level buckets (top of hierarchy)
+    RootBucketIDs []string             `bson:"root_bucket_ids"`
     
     // Statistics
     BlobCount   int                    `bson:"blob_count"`
+    BucketCount int                    `bson:"bucket_count"`
     TotalSize   int64                  `bson:"total_size_bytes"`
     
     UpdatedAt   time.Time              `bson:"updated_at"`
+}
+
+type Bucket struct {
+    ID              string                 `bson:"_id"`
+    UserID          string                 `bson:"user_id"`
+    Name            string                 `bson:"name"`
+    Type            string                 `bson:"type"`  // book, album, research, etc.
+    
+    // Hierarchy
+    ParentBucketID  *string                `bson:"parent_bucket_id,omitempty"`
+    ChildBucketIDs  []string               `bson:"child_bucket_ids"`
+    
+    // Contents
+    BlobIDs         []string               `bson:"blob_ids"`
+    
+    // User-defined metadata
+    Metadata        map[string]interface{} `bson:"metadata"`
+    
+    CreatedAt       time.Time              `bson:"created_at"`
 }
 ```
 
@@ -235,10 +253,15 @@ Examples:
    Client → Studio API (WebSocket)
    {
      "action": "create_blob",
+     "processor_id": "user-input",
+     "schema_id": "text-input-v1",
      "data": {
        "content": "The ship sailed.",
-       "book_id": "my-novel",
-       "chapter": 1
+       "style": "creative"
+     },
+     "bucket_ids": ["bucket-novel-123", "bucket-chapter-1"],
+     "metadata": {
+       "title": "Opening scene"
      }
    }
 
@@ -363,16 +386,19 @@ Examples:
       "minLength": 10,
       "maxLength": 50000
     },
-    "metadata": {
-      "type": "object",
-      "properties": {
-        "book_id": {"type": "string"},
-        "chapter": {"type": "integer"},
-        "style": {
-          "type": "string",
-          "enum": ["formal", "casual", "creative"]
-        }
-      }
+    "style": {
+      "type": "string",
+      "enum": ["formal", "casual", "creative", "technical", "poetic"],
+      "default": "creative"
+    },
+    "tone": {
+      "type": "string",
+      "enum": ["serious", "humorous", "dramatic", "neutral"],
+      "default": "neutral"
+    },
+    "context": {
+      "type": "string",
+      "description": "Optional context to guide the processor"
     }
   }
 }

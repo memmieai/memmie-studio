@@ -1,16 +1,17 @@
-# State Service Design - Blob Storage System (UPDATED)
+# State Service Design - Blob Storage System with Dynamic Buckets
 
 ## Overview
 
-The State Service (Port 8006) is the central repository for all user-created and processor-derived blobs. It uses MongoDB for flexible schema storage, maintains blob relationships, and integrates with the Schema Service for validation.
+The State Service (Port 8006) is the central repository for all user-created and processor-derived blobs. It uses MongoDB for flexible schema storage, maintains blob relationships, and integrates with the Schema Service for validation. The service uses a dynamic bucket system for flexible organization of blobs into any hierarchical structure.
 
 ## Core Responsibilities
 
 1. **Blob Storage**: Store all blobs with dynamic schema-validated data
-2. **Relationship Management**: Maintain parent-child and cross-references
-3. **Schema Integration**: Validate all blob data against registered schemas
-4. **Event Emission**: Publish NATS events for processor triggers
-5. **User State**: Track books, conversations, and organized content
+2. **Bucket Management**: Organize blobs into flexible, hierarchical buckets
+3. **Relationship Management**: Maintain parent-child and cross-references
+4. **Schema Integration**: Validate all blob data against registered schemas
+5. **Event Emission**: Publish NATS events for processor triggers
+6. **User State**: Track buckets and organized content
 
 ## Data Models
 
@@ -30,10 +31,8 @@ type Blob struct {
     ParentID    *string             `bson:"parent_id,omitempty"`
     DerivedIDs  []string            `bson:"derived_ids"`  // Blobs derived from this
     
-    // Organization
-    BookID      *string             `bson:"book_id,omitempty"`
-    ConversationID *string          `bson:"conversation_id,omitempty"`
-    CollectionID *string            `bson:"collection_id,omitempty"`
+    // Bucket Organization (flexible containers)
+    BucketIDs   []string            `bson:"bucket_ids"`   // Which buckets contain this blob
     
     // Metadata for queries
     Title       string              `bson:"title"`
@@ -50,6 +49,38 @@ type Blob struct {
     UpdatedAt   time.Time           `bson:"updated_at"`
     AccessedAt  time.Time           `bson:"accessed_at"`
 }
+
+// Bucket - Flexible container for organizing blobs
+type Bucket struct {
+    ID              string                 `bson:"_id"`
+    UserID          string                 `bson:"user_id"`
+    Name            string                 `bson:"name"`
+    Type            string                 `bson:"type"`        // book, album, research, conversation, etc.
+    
+    // Hierarchical structure
+    ParentBucketID  *string                `bson:"parent_bucket_id,omitempty"`
+    ChildBucketIDs  []string               `bson:"child_bucket_ids"`
+    
+    // Contained blobs
+    BlobIDs         []string               `bson:"blob_ids"`
+    BlobCount       int                    `bson:"blob_count"`
+    
+    // User-defined metadata
+    Metadata        map[string]interface{} `bson:"metadata"`
+    
+    // Display properties
+    Description     string                 `bson:"description"`
+    Icon            string                 `bson:"icon"`
+    Color           string                 `bson:"color"`
+    SortOrder       int                    `bson:"sort_order"`
+    
+    // Access control
+    IsPublic        bool                   `bson:"is_public"`
+    SharedWith      []string               `bson:"shared_with"`  // User IDs
+    
+    CreatedAt       time.Time              `bson:"created_at"`
+    UpdatedAt       time.Time              `bson:"updated_at"`
+}
 ```
 
 ### UserState Document
@@ -60,37 +91,22 @@ type UserState struct {
     
     // Statistics
     TotalBlobs      int               `bson:"total_blobs"`
+    TotalBuckets    int               `bson:"total_buckets"`
     TotalSize       int64             `bson:"total_size_bytes"`
     BlobsByProcessor map[string]int   `bson:"blobs_by_processor"`
     
-    // Organized content
-    Books           []BookProject     `bson:"books"`
-    Conversations   []Conversation    `bson:"conversations"`
-    Collections     []BlobCollection  `bson:"collections"`
+    // Root buckets (top-level organization)
+    RootBucketIDs   []string          `bson:"root_bucket_ids"`
     
     // Processor instances
     ProcessorInstances []ProcessorInstance `bson:"processor_instances"`
     
     // Quotas
     MaxBlobs        int               `bson:"max_blobs"`
+    MaxBuckets      int               `bson:"max_buckets"`
     MaxSizeBytes    int64             `bson:"max_size_bytes"`
     
     UpdatedAt       time.Time         `bson:"updated_at"`
-}
-
-type BookProject struct {
-    ID              string            `bson:"id"`
-    Title           string            `bson:"title"`
-    Description     string            `bson:"description"`
-    Chapters        []ChapterRef      `bson:"chapters"`
-    CreatedAt       time.Time         `bson:"created_at"`
-}
-
-type ChapterRef struct {
-    ChapterNum      int               `bson:"chapter_num"`
-    Title           string            `bson:"title"`
-    DraftBlobID     string            `bson:"draft_blob_id"`
-    ProcessedBlobIDs map[string]string `bson:"processed_blob_ids"` // processor_id -> blob_id
 }
 ```
 
@@ -102,13 +118,17 @@ type ChapterRef struct {
 POST /api/v1/users/{user_id}/blobs
 Request:
 {
-    "content": "Chapter 1 draft",
-    "content_type": "text/plain",
-    "provider_id": "book:my-novel",
+    "processor_id": "user-input",
+    "schema_id": "text-input-v1",
+    "data": {
+        "content": "Chapter 1 draft",
+        "style": "creative"
+    },
+    "bucket_ids": ["bucket-123"],  // Optional: add to specific buckets
     "parent_id": "optional-parent-blob-id",
     "metadata": {
-        "chapter": 1,
-        "status": "draft"
+        "title": "Chapter 1",
+        "tags": ["draft", "fiction"]
     }
 }
 Response:
@@ -131,7 +151,7 @@ Response:
 }
 
 // List user's blobs with filtering
-GET /api/v1/users/{user_id}/blobs?provider_id=book:my-novel&depth=0
+GET /api/v1/users/{user_id}/blobs?bucket_id=bucket-123&processor_id=text-expansion
 Response:
 {
     "blobs": [...],
@@ -140,7 +160,7 @@ Response:
 }
 
 // Get user's DAG structure
-GET /api/v1/users/{user_id}/dag
+GET /api/v1/users/{user_id}/dag?bucket_id=bucket-123  // Optional: filter by bucket
 Response:
 {
     "roots": [
@@ -158,6 +178,81 @@ Response:
     ],
     "total_nodes": 42,
     "max_depth": 5
+}
+```
+
+### Bucket Operations
+```go
+// Create a new bucket
+POST /api/v1/users/{user_id}/buckets
+Request:
+{
+    "name": "My Novel",
+    "type": "book",
+    "parent_bucket_id": null,
+    "metadata": {
+        "genre": "science fiction",
+        "target_word_count": 80000
+    },
+    "description": "My first science fiction novel",
+    "icon": "📚",
+    "color": "#4A90E2"
+}
+
+// Get bucket with contents
+GET /api/v1/users/{user_id}/buckets/{bucket_id}
+Response:
+{
+    "id": "bucket-123",
+    "name": "My Novel",
+    "type": "book",
+    "blob_ids": ["blob-1", "blob-2"],
+    "child_bucket_ids": ["chapter-1", "chapter-2"],
+    "metadata": {...}
+}
+
+// List user's buckets
+GET /api/v1/users/{user_id}/buckets?type=book
+Response:
+{
+    "buckets": [
+        {
+            "id": "bucket-123",
+            "name": "My Novel",
+            "type": "book",
+            "blob_count": 42,
+            "child_count": 12
+        }
+    ]
+}
+
+// Add blob to bucket
+POST /api/v1/users/{user_id}/buckets/{bucket_id}/blobs
+Request:
+{
+    "blob_id": "blob-456"
+}
+
+// Move bucket to new parent
+PUT /api/v1/users/{user_id}/buckets/{bucket_id}/parent
+Request:
+{
+    "parent_bucket_id": "bucket-789"  // null for root level
+}
+
+// Get bucket hierarchy
+GET /api/v1/users/{user_id}/buckets/{bucket_id}/tree
+Response:
+{
+    "id": "bucket-123",
+    "name": "My Novel",
+    "children": [
+        {
+            "id": "chapter-1",
+            "name": "Chapter 1",
+            "children": []
+        }
+    ]
 }
 ```
 
@@ -206,17 +301,22 @@ Request:
 ```javascript
 // Optimize blob queries
 db.blobs.createIndex({ "user_id": 1, "created_at": -1 })
-db.blobs.createIndex({ "user_id": 1, "provider_id": 1 })
+db.blobs.createIndex({ "user_id": 1, "processor_id": 1 })
+db.blobs.createIndex({ "bucket_ids": 1 })
 db.blobs.createIndex({ "parent_id": 1 })
-db.blobs.createIndex({ "user_id": 1, "depth": 1 })
-db.blobs.createIndex({ "metadata.status": 1 })
+db.blobs.createIndex({ "schema_id": 1 })
 db.blobs.createIndex({ "tags": 1 })
 
+// Bucket queries
+db.buckets.createIndex({ "user_id": 1, "type": 1 })
+db.buckets.createIndex({ "parent_bucket_id": 1 })
+db.buckets.createIndex({ "blob_ids": 1 })
+
 // Text search
-db.blobs.createIndex({ "content": "text" })
+db.blobs.createIndex({ "title": "text", "preview": "text" })
 
 // User state queries
-db.user_blob_states.createIndex({ "user_id": 1 }, { unique: true })
+db.user_states.createIndex({ "user_id": 1 }, { unique: true })
 ```
 
 ## Service Implementation
@@ -236,9 +336,24 @@ type BlobRepository interface {
     Create(ctx context.Context, blob *Blob) error
     GetByID(ctx context.Context, userID string, blobID primitive.ObjectID) (*Blob, error)
     GetByUser(ctx context.Context, userID string, filter BlobFilter) ([]*Blob, error)
-    GetDAG(ctx context.Context, userID string) (*DAGStructure, error)
+    GetByBucket(ctx context.Context, bucketID string) ([]*Blob, error)
+    GetDAG(ctx context.Context, userID string, bucketID *string) (*DAGStructure, error)
     ApplyDelta(ctx context.Context, blobID primitive.ObjectID, delta Delta) error
     GetChildren(ctx context.Context, blobID primitive.ObjectID) ([]*Blob, error)
+    AddToBucket(ctx context.Context, blobID, bucketID string) error
+    RemoveFromBucket(ctx context.Context, blobID, bucketID string) error
+}
+
+type BucketRepository interface {
+    Create(ctx context.Context, bucket *Bucket) error
+    GetByID(ctx context.Context, userID string, bucketID string) (*Bucket, error)
+    GetByUser(ctx context.Context, userID string, filter BucketFilter) ([]*Bucket, error)
+    GetRootBuckets(ctx context.Context, userID string) ([]*Bucket, error)
+    GetChildren(ctx context.Context, bucketID string) ([]*Bucket, error)
+    GetTree(ctx context.Context, bucketID string) (*BucketTree, error)
+    Update(ctx context.Context, bucket *Bucket) error
+    Delete(ctx context.Context, bucketID string) error
+    MoveToParent(ctx context.Context, bucketID string, newParentID *string) error
 }
 
 type MongoBlobRepository struct {
@@ -312,8 +427,10 @@ func (r *MongoBlobRepository) GetDAG(ctx context.Context, userID string) (*DAGSt
 package service
 
 type StateService struct {
-    blobRepo BlobRepository
-    eventBus EventBus
+    blobRepo   BlobRepository
+    bucketRepo BucketRepository
+    schemaClient SchemaClient
+    eventBus   EventBus
 }
 
 func (s *StateService) CreateBlob(ctx context.Context, userID string, req CreateBlobRequest) (*Blob, error) {
@@ -327,29 +444,96 @@ func (s *StateService) CreateBlob(ctx context.Context, userID string, req Create
         return nil, ErrQuotaExceeded
     }
     
+    // Validate data against schema
+    if err := s.schemaClient.Validate(ctx, req.SchemaID, req.Data); err != nil {
+        return nil, fmt.Errorf("schema validation failed: %w", err)
+    }
+    
     blob := &Blob{
         UserID:      userID,
-        Content:     req.Content,
-        ContentType: req.ContentType,
-        ProviderID:  req.ProviderID,
+        ProcessorID: req.ProcessorID,
+        SchemaID:    req.SchemaID,
+        Data:        req.Data,
+        BucketIDs:   req.BucketIDs,
         ParentID:    req.ParentID,
-        Metadata:    req.Metadata,
-        Size:        int64(len(req.Content)),
+        Title:       req.Metadata.Title,
+        Tags:        req.Metadata.Tags,
+        ContentSize: calculateDataSize(req.Data),
     }
     
     if err := s.blobRepo.Create(ctx, blob); err != nil {
         return nil, err
     }
     
-    // Publish event
-    s.eventBus.Publish(ctx, "blob.created", BlobCreatedEvent{
+    // Add to buckets if specified
+    for _, bucketID := range req.BucketIDs {
+        s.bucketRepo.AddBlob(ctx, bucketID, blob.ID)
+    }
+    
+    // Publish event with schema information
+    s.eventBus.Publish(ctx, fmt.Sprintf("blob.created.%s", req.SchemaID), BlobCreatedEvent{
         BlobID:     blob.ID.Hex(),
         UserID:     userID,
-        ProviderID: req.ProviderID,
+        ProcessorID: req.ProcessorID,
+        SchemaID:   req.SchemaID,
+        BucketIDs:  req.BucketIDs,
         ParentID:   req.ParentID,
     })
     
     return blob, nil
+}
+
+func (s *StateService) CreateBucket(ctx context.Context, userID string, req CreateBucketRequest) (*Bucket, error) {
+    // Check user quotas
+    state, err := s.getUserState(ctx, userID)
+    if err != nil {
+        return nil, err
+    }
+    
+    if state.TotalBuckets >= state.MaxBuckets {
+        return nil, ErrBucketQuotaExceeded
+    }
+    
+    bucket := &Bucket{
+        ID:             generateBucketID(),
+        UserID:         userID,
+        Name:           req.Name,
+        Type:           req.Type,
+        ParentBucketID: req.ParentBucketID,
+        Metadata:       req.Metadata,
+        Description:    req.Description,
+        Icon:           req.Icon,
+        Color:          req.Color,
+        CreatedAt:      time.Now(),
+        UpdatedAt:      time.Now(),
+    }
+    
+    if err := s.bucketRepo.Create(ctx, bucket); err != nil {
+        return nil, err
+    }
+    
+    // Update parent bucket if exists
+    if req.ParentBucketID != nil {
+        parent, err := s.bucketRepo.GetByID(ctx, userID, *req.ParentBucketID)
+        if err != nil {
+            return nil, err
+        }
+        parent.ChildBucketIDs = append(parent.ChildBucketIDs, bucket.ID)
+        s.bucketRepo.Update(ctx, parent)
+    } else {
+        // Add to user's root buckets
+        s.updateUserRootBuckets(ctx, userID, bucket.ID)
+    }
+    
+    // Publish event
+    s.eventBus.Publish(ctx, "bucket.created", BucketCreatedEvent{
+        BucketID:   bucket.ID,
+        UserID:     userID,
+        Type:       req.Type,
+        ParentID:   req.ParentBucketID,
+    })
+    
+    return bucket, nil
 }
 
 func (s *StateService) ApplyDelta(ctx context.Context, blobID string, delta Delta) error {
@@ -429,29 +613,51 @@ func (s *StateService) CreateBlobsBatch(ctx context.Context, userID string, blob
 
 ### NATS Events Published
 ```go
-// blob.created - When new blob is created
+// blob.created.<schema-id> - When new blob is created
 type BlobCreatedEvent struct {
-    BlobID     string    `json:"blob_id"`
-    UserID     string    `json:"user_id"`
-    ProviderID string    `json:"provider_id"`
-    ParentID   *string   `json:"parent_id,omitempty"`
-    CreatedAt  time.Time `json:"created_at"`
+    BlobID      string    `json:"blob_id"`
+    UserID      string    `json:"user_id"`
+    ProcessorID string    `json:"processor_id"`
+    SchemaID    string    `json:"schema_id"`
+    BucketIDs   []string  `json:"bucket_ids"`
+    ParentID    *string   `json:"parent_id,omitempty"`
+    CreatedAt   time.Time `json:"created_at"`
 }
 
 // blob.updated - When blob content changes
 type BlobUpdatedEvent struct {
     BlobID    string    `json:"blob_id"`
     UserID    string    `json:"user_id"`
+    SchemaID  string    `json:"schema_id"`
     Version   int       `json:"version"`
     DeltaID   string    `json:"delta_id"`
     UpdatedAt time.Time `json:"updated_at"`
 }
 
-// dag.modified - When DAG structure changes
-type DAGModifiedEvent struct {
-    UserID       string   `json:"user_id"`
-    AffectedIDs  []string `json:"affected_ids"`
-    OperationType string  `json:"operation_type"`
+// bucket.created - When new bucket is created
+type BucketCreatedEvent struct {
+    BucketID  string    `json:"bucket_id"`
+    UserID    string    `json:"user_id"`
+    Type      string    `json:"type"`
+    ParentID  *string   `json:"parent_id,omitempty"`
+    CreatedAt time.Time `json:"created_at"`
+}
+
+// bucket.blob.added - When blob is added to bucket
+type BucketBlobAddedEvent struct {
+    BucketID  string    `json:"bucket_id"`
+    BlobID    string    `json:"blob_id"`
+    UserID    string    `json:"user_id"`
+    AddedAt   time.Time `json:"added_at"`
+}
+
+// bucket.structure.changed - When bucket hierarchy changes
+type BucketStructureChangedEvent struct {
+    BucketID      string    `json:"bucket_id"`
+    UserID        string    `json:"user_id"`
+    OldParentID   *string   `json:"old_parent_id,omitempty"`
+    NewParentID   *string   `json:"new_parent_id,omitempty"`
+    ChangedAt     time.Time `json:"changed_at"`
 }
 ```
 

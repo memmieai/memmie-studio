@@ -6,11 +6,12 @@ The Schema Service (Port 8011) is the central authority for all data schemas in 
 
 ## Core Responsibilities
 
-1. **Schema Registry**: Store and manage all processor schemas
+1. **Schema Registry**: Store and manage all processor and system schemas
 2. **Version Control**: Handle schema evolution with semantic versioning
 3. **Validation Service**: Validate data against schemas
 4. **Transformation Rules**: Define mappings between schema versions
 5. **Usage Analytics**: Track schema usage across the system
+6. **Bucket Schemas**: Manage schemas for bucket metadata and organization
 
 ## Database Design (PostgreSQL)
 
@@ -598,6 +599,239 @@ func (p *TextExpansionProcessor) Process(ctx context.Context, input BlobData) (*
 - P99 validation latency > 100ms
 - Schema not used in 30 days
 - Deprecated schema still in use
+
+## Bucket System Schemas
+
+### Core Bucket Schema
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "bucket-v1",
+  "type": "object",
+  "required": ["name", "type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "type": {
+      "type": "string",
+      "description": "User-defined bucket type",
+      "examples": ["book", "album", "research", "conversation", "project"]
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "icon": {
+      "type": "string",
+      "description": "Emoji or icon identifier"
+    },
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}$"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Type-specific metadata",
+      "additionalProperties": true
+    }
+  }
+}
+```
+
+### Bucket Type Metadata Schemas
+
+#### Book Bucket Metadata
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "bucket-metadata-book-v1",
+  "type": "object",
+  "properties": {
+    "genre": {
+      "type": "string",
+      "enum": ["fiction", "non-fiction", "sci-fi", "fantasy", "mystery", "romance", "thriller"]
+    },
+    "target_word_count": {
+      "type": "integer",
+      "minimum": 1000
+    },
+    "chapters_planned": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "deadline": {
+      "type": "string",
+      "format": "date"
+    },
+    "publisher": {
+      "type": "string"
+    },
+    "isbn": {
+      "type": "string",
+      "pattern": "^[0-9]{13}$"
+    }
+  }
+}
+```
+
+#### Album Bucket Metadata
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "bucket-metadata-album-v1",
+  "type": "object",
+  "properties": {
+    "genre": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "release_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "label": {
+      "type": "string"
+    },
+    "total_tracks": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "duration_minutes": {
+      "type": "number",
+      "minimum": 0
+    },
+    "recording_studio": {
+      "type": "string"
+    }
+  }
+}
+```
+
+#### Research Project Bucket Metadata
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "bucket-metadata-research-v1",
+  "type": "object",
+  "properties": {
+    "institution": {
+      "type": "string"
+    },
+    "grant_number": {
+      "type": "string"
+    },
+    "principal_investigator": {
+      "type": "string"
+    },
+    "start_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "end_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "discipline": {
+      "type": "string"
+    },
+    "funding_amount": {
+      "type": "number",
+      "minimum": 0
+    }
+  }
+}
+```
+
+#### Conversation Bucket Metadata
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "bucket-metadata-conversation-v1",
+  "type": "object",
+  "properties": {
+    "participants": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "topic": {
+      "type": "string"
+    },
+    "context": {
+      "type": "string",
+      "enum": ["meeting", "brainstorm", "interview", "casual", "support"]
+    },
+    "language": {
+      "type": "string",
+      "default": "en"
+    },
+    "is_archived": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}
+```
+
+### Bucket Schema Registration
+
+Buckets use a flexible metadata system where the base bucket schema is always validated, and additional metadata validation is optional based on bucket type:
+
+```go
+// Schema Service - Bucket validation
+func (s *SchemaService) ValidateBucket(ctx context.Context, bucket *Bucket) error {
+    // Always validate against base bucket schema
+    if err := s.Validate(ctx, "bucket-v1", bucket); err != nil {
+        return fmt.Errorf("bucket validation failed: %w", err)
+    }
+    
+    // Optional: Validate metadata based on bucket type
+    metadataSchemaID := fmt.Sprintf("bucket-metadata-%s-v1", bucket.Type)
+    if s.SchemaExists(ctx, metadataSchemaID) {
+        if err := s.Validate(ctx, metadataSchemaID, bucket.Metadata); err != nil {
+            return fmt.Errorf("bucket metadata validation failed: %w", err)
+        }
+    }
+    
+    return nil
+}
+```
+
+### Default System Schemas
+
+The Schema Service comes pre-configured with essential system schemas:
+
+```yaml
+system_schemas:
+  - id: bucket-v1
+    name: Core Bucket Schema
+    processor_id: system
+    immutable: true
+    
+  - id: blob-metadata-v1
+    name: Blob Metadata Schema
+    processor_id: system
+    
+  - id: user-state-v1
+    name: User State Schema
+    processor_id: system
+    
+  - id: processor-config-v1
+    name: Processor Configuration Schema
+    processor_id: system
+```
 
 ## Implementation Priority
 
