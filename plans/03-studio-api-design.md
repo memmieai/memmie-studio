@@ -1,13 +1,14 @@
-# Studio API Design - Orchestration Layer
+# Studio API Design - Orchestration with Real-time WebSocket (UPDATED)
 
 ## Overview
 
-The Studio Service (Port 8010) acts as an orchestration layer that:
+The Studio Service (Port 8010) is the central orchestration layer that:
 1. Serves the React frontend application
-2. Aggregates data from backend services (State, Provider, Workflow)
-3. Constructs optimized DTOs for client consumption  
-4. Manages WebSocket connections for real-time updates
+2. Provides WebSocket connections for real-time updates
+3. Aggregates data from backend services (State, Schema, Processor)
+4. Constructs optimized DTOs for client consumption
 5. Handles authentication and session management
+6. Filters and routes NATS events to connected clients
 
 ## Core Architecture
 

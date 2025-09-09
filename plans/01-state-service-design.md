@@ -1,82 +1,96 @@
-# State Service Design - Blob Storage System
+# State Service Design - Blob Storage System (UPDATED)
 
 ## Overview
 
-The State Service (Port 8006) is responsible for managing per-user blob storage using MongoDB. It maintains the DAG structure of blobs and tracks all changes through deltas.
+The State Service (Port 8006) is the central repository for all user-created and processor-derived blobs. It uses MongoDB for flexible schema storage, maintains blob relationships, and integrates with the Schema Service for validation.
 
 ## Core Responsibilities
 
-1. **Blob Storage**: Store and retrieve user content blobs
-2. **DAG Management**: Maintain parent-child relationships 
-3. **Delta Tracking**: Version control through immutable deltas
-4. **Query Operations**: Efficient retrieval by user, provider, or relationship
+1. **Blob Storage**: Store all blobs with dynamic schema-validated data
+2. **Relationship Management**: Maintain parent-child and cross-references
+3. **Schema Integration**: Validate all blob data against registered schemas
+4. **Event Emission**: Publish NATS events for processor triggers
+5. **User State**: Track books, conversations, and organized content
 
 ## Data Models
 
 ### Blob Document (MongoDB)
 ```go
 type Blob struct {
-    ID          primitive.ObjectID   `bson:"_id"`
+    ID          string              `bson:"_id"`
     UserID      string              `bson:"user_id"`
-    ProviderID  string              `bson:"provider_id"`  // e.g., "book:my-novel"
+    ProcessorID string              `bson:"processor_id"` // Which processor created this
+    SchemaID    string              `bson:"schema_id"`    // References Schema Service
+    SchemaVersion string            `bson:"schema_version"`
     
-    // Content
-    Content     string              `bson:"content"`
-    ContentType string              `bson:"content_type"` // text/plain, application/json, etc.
-    Size        int64               `bson:"size"`
+    // Dynamic content matching schema
+    Data        interface{}         `bson:"data"`         // Validated against schema
     
-    // DAG Relationships  
-    ParentID    *primitive.ObjectID `bson:"parent_id,omitempty"`
-    ChildrenIDs []primitive.ObjectID `bson:"children_ids"`
-    Depth       int                 `bson:"depth"` // Distance from root
+    // Relationships
+    ParentID    *string             `bson:"parent_id,omitempty"`
+    DerivedIDs  []string            `bson:"derived_ids"`  // Blobs derived from this
     
-    // Metadata
-    Metadata    map[string]interface{} `bson:"metadata"`
-    Tags        []string              `bson:"tags"`
+    // Organization
+    BookID      *string             `bson:"book_id,omitempty"`
+    ConversationID *string          `bson:"conversation_id,omitempty"`
+    CollectionID *string            `bson:"collection_id,omitempty"`
     
-    // Versioning
-    Version     int                 `bson:"version"`
-    Deltas      []Delta             `bson:"deltas"` // Embedded for performance
+    // Metadata for queries
+    Title       string              `bson:"title"`
+    Preview     string              `bson:"preview"`      // First 500 chars
+    Tags        []string            `bson:"tags"`
+    ContentSize int64               `bson:"content_size_bytes"`
+    
+    // Processing state
+    ProcessingState string          `bson:"processing_state"` // pending, processing, completed, failed
+    ProcessingMeta map[string]interface{} `bson:"processing_meta"`
     
     // Timestamps
     CreatedAt   time.Time           `bson:"created_at"`
     UpdatedAt   time.Time           `bson:"updated_at"`
-    ProcessedAt *time.Time          `bson:"processed_at,omitempty"`
-}
-
-type Delta struct {
-    ID          string              `bson:"id"`
-    Type        string              `bson:"type"` // create, update, delete, transform
-    ProviderID  string              `bson:"provider_id"`
-    Path        string              `bson:"path"` // JSON path for partial updates
-    OldValue    interface{}         `bson:"old_value,omitempty"`
-    NewValue    interface{}         `bson:"new_value,omitempty"`
-    Metadata    map[string]interface{} `bson:"metadata"`
-    AppliedAt   time.Time           `bson:"applied_at"`
-    AppliedBy   string              `bson:"applied_by"` // user_id or provider_id
+    AccessedAt  time.Time           `bson:"accessed_at"`
 }
 ```
 
-### UserBlobState Document
+### UserState Document
 ```go
-type UserBlobState struct {
-    ID              primitive.ObjectID `bson:"_id"`
+type UserState struct {
+    ID              string            `bson:"_id"`
     UserID          string            `bson:"user_id"`
     
     // Statistics
     TotalBlobs      int               `bson:"total_blobs"`
-    TotalSize       int64             `bson:"total_size"`
-    ProviderCounts  map[string]int    `bson:"provider_counts"`
+    TotalSize       int64             `bson:"total_size_bytes"`
+    BlobsByProcessor map[string]int   `bson:"blobs_by_processor"`
     
-    // DAG Metrics
-    MaxDepth        int               `bson:"max_depth"`
-    RootBlobs       []primitive.ObjectID `bson:"root_blobs"`
+    // Organized content
+    Books           []BookProject     `bson:"books"`
+    Conversations   []Conversation    `bson:"conversations"`
+    Collections     []BlobCollection  `bson:"collections"`
+    
+    // Processor instances
+    ProcessorInstances []ProcessorInstance `bson:"processor_instances"`
     
     // Quotas
     MaxBlobs        int               `bson:"max_blobs"`
     MaxSizeBytes    int64             `bson:"max_size_bytes"`
     
     UpdatedAt       time.Time         `bson:"updated_at"`
+}
+
+type BookProject struct {
+    ID              string            `bson:"id"`
+    Title           string            `bson:"title"`
+    Description     string            `bson:"description"`
+    Chapters        []ChapterRef      `bson:"chapters"`
+    CreatedAt       time.Time         `bson:"created_at"`
+}
+
+type ChapterRef struct {
+    ChapterNum      int               `bson:"chapter_num"`
+    Title           string            `bson:"title"`
+    DraftBlobID     string            `bson:"draft_blob_id"`
+    ProcessedBlobIDs map[string]string `bson:"processed_blob_ids"` // processor_id -> blob_id
 }
 ```
 
