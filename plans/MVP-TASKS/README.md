@@ -1,6 +1,6 @@
-# Memmie Studio MVP Implementation Tasks
+# ReYNa Studio (RYN) MVP Implementation Tasks
 
-This folder contains detailed, sequential task breakdowns for implementing the Memmie Studio MVP. Each task is designed to be completed independently by an agent or developer in one session.
+This folder contains detailed, sequential task breakdowns for implementing the ReYNa Studio (RYN) MVP. Each task is designed to be completed independently by an agent or developer in one session.
 
 ## MVP Goal
 Build a beta-testable platform for 100 users with:

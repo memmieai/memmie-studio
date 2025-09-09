@@ -1,6 +1,8 @@
-# Memmie Studio
+# ReYNa Studio (RYN)
 
-A universal productivity platform that transforms how users interact with AI through dynamic, content-aware interfaces.
+**ReYNa Studio** - A universal productivity platform that transforms how users interact with AI through dynamic, content-aware interfaces.
+
+> **RYN** (ReYNa) is your AI-powered creative workspace where ideas evolve into polished content.
 
 ## 🎯 Vision
 
